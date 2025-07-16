@@ -25,7 +25,7 @@ cam_rgb.video.link(xout_video.input)
 # Start pipeline
 with dai.Device(pipeline) as device:
     video_queue = device.getOutputQueue(name="video", maxSize=4, blocking=False)
-    print("✅ OAK-1 initialized. Running dice detection...")
+    print("OAK-1 initialized. Running dice detection...")
 
     while True:
         frame = video_queue.get().getCvFrame()

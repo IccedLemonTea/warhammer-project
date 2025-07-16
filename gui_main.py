@@ -1,11 +1,25 @@
 import sys
+
+import os
+os.environ["DISPLAY"] = ":0"
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '/usr/lib/aarch64-linux-gnu/qt5/plugins/platforms'
+
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QComboBox,
     QVBoxLayout, QHBoxLayout, QSpacerItem, QSizePolicy,
     QPushButton, QStackedLayout
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QPixmap, QImage
+
+
+## Causing QT problems
+import depthai as dai
+import cv2
+from ultralytics import YOLO
 
 
 class WarhammerDiceCheckerUI(QWidget):
@@ -87,9 +101,21 @@ class WarhammerDiceCheckerUI(QWidget):
         # Build both screens
         self.army_page = self.init_army_choice()
         self.combat_page = self.init_combat_choice()
+        
+
+        self.video_label = QLabel()  # Will show video feed
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_frame)
+
+        self.detection_page = self.init_dice_detection()
+
+        self.pipeline = None
+        self.device = None
+        self.queue = None
 
         self.stack.addWidget(self.army_page)   # Index 0
         self.stack.addWidget(self.combat_page) # Index 1
+        self.stack.addWidget(self.detection_page) # Index 2
 
         self.stack.setCurrentIndex(0)
 
@@ -172,7 +198,7 @@ class WarhammerDiceCheckerUI(QWidget):
         defender_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         save_continue = QPushButton("Save && Continue")
-        save_continue.clicked.connect(lambda: print("Move to dice roll screen here"))
+        save_continue.clicked.connect(lambda: self.stack.setCurrentIndex(2))
         defender_layout.addWidget(save_continue)
 
         main_layout.addLayout(attacker_layout)
@@ -180,6 +206,46 @@ class WarhammerDiceCheckerUI(QWidget):
         page.setLayout(main_layout)
         return page
 
+    def init_dice_detection(self):
+        page = QWidget()
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("Dice Detection Mode:"))
+        layout.addWidget(self.video_label)
+
+        start_btn = QPushButton("Start Camera")
+        start_btn.clicked.connect(self.start_pipeline)
+        layout.addWidget(start_btn)
+
+        page.setLayout(layout)
+        return page
+
+    def start_pipeline(self):
+        # Basic mono camera + color preview pipeline
+        self.pipeline = dai.Pipeline()
+        cam = self.pipeline.create(dai.node.ColorCamera)
+        cam.setPreviewSize(640, 480)
+        cam.setInterleaved(False)
+        cam.setFps(30)
+
+        xout = self.pipeline.create(dai.node.XLinkOut)
+        xout.setStreamName("video")
+        cam.preview.link(xout.input)
+
+        self.device = dai.Device(self.pipeline)
+        self.queue = self.device.getOutputQueue(name="video", maxSize=4, blocking=False)
+
+        self.timer.start(30)  # refresh ~33 fps
+
+    def update_frame(self):
+        if self.queue:
+            in_frame = self.queue.get()
+            frame = in_frame.getCvFrame()
+            rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            self.video_label.setPixmap(QPixmap.fromImage(qt_image))
 
     def update_attacker_logo(self, army_name):
         if army_name in self.army_logos:
