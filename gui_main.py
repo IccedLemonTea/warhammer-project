@@ -16,7 +16,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPixmap, QImage
 
 
-## Causing QT problems
+
 import depthai as dai
 import cv2
 from ultralytics import YOLO
@@ -221,31 +221,64 @@ class WarhammerDiceCheckerUI(QWidget):
         return page
 
     def start_pipeline(self):
-        # Basic mono camera + color preview pipeline
         self.pipeline = dai.Pipeline()
+
+        # === Color camera node ===
         cam = self.pipeline.create(dai.node.ColorCamera)
-        cam.setPreviewSize(640, 480)
+        cam.setPreviewSize(640, 640)  # Must match model input size
         cam.setInterleaved(False)
-        cam.setFps(30)
+        cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
+        cam.setFps(10)
 
-        xout = self.pipeline.create(dai.node.XLinkOut)
-        xout.setStreamName("video")
-        cam.preview.link(xout.input)
+        # === Neural Network node ===
+        nn = self.pipeline.create(dai.node.NeuralNetwork)
+        nn.setBlobPath("/home/warhammer/.cache/blobconverter/best_openvino_2022.1_6shave.blob")  # Your .blob file
+        cam.preview.link(nn.input)
 
+        # === Outputs ===
+        xout_video = self.pipeline.create(dai.node.XLinkOut)
+        xout_video.setStreamName("video")
+        cam.preview.link(xout_video.input)
+
+        xout_nn = self.pipeline.create(dai.node.XLinkOut)
+        xout_nn.setStreamName("nn")
+        nn.out.link(xout_nn.input)
+
+        # === Start device ===
         self.device = dai.Device(self.pipeline)
         self.queue = self.device.getOutputQueue(name="video", maxSize=4, blocking=False)
+        self.nn_queue = self.device.getOutputQueue(name="nn", maxSize=4, blocking=False)
 
-        self.timer.start(30)  # refresh ~33 fps
+        self.timer.start(30)
 
     def update_frame(self):
-        if self.queue:
-            in_frame = self.queue.get()
-            frame = in_frame.getCvFrame()
+        if self.queue and self.nn_queue:
+            frame = self.queue.get().getCvFrame()
+            nn_data = self.nn_queue.get()
+
+            detections = nn_data.detections if hasattr(nn_data, 'detections') else []
+
+            for det in detections:
+                # Get coords as pixel values
+                x1 = int(det.xmin * frame.shape[1])
+                y1 = int(det.ymin * frame.shape[0])
+                x2 = int(det.xmax * frame.shape[1])
+                y2 = int(det.ymax * frame.shape[0])
+                label = int(det.label)
+                conf = det.confidence
+
+                # Draw box
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(frame, f"ID {label} {conf:.2f}", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+
+            # Convert to Qt
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             self.video_label.setPixmap(QPixmap.fromImage(qt_image))
+
 
     def update_attacker_logo(self, army_name):
         if army_name in self.army_logos:
