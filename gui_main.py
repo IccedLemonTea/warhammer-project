@@ -1,6 +1,12 @@
+## Author : Cooper White
+## Date : 07/15/25 Last modified : 07/21/25
+## Purpose
+
 import sys
 
 import os
+
+# Needed on my end due to ssh dev pipeline, may not be necessary in practice
 os.environ["DISPLAY"] = ":0"
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 
@@ -94,7 +100,7 @@ class WarhammerDiceCheckerUI(QWidget):
         self.setLayout(self.stack)
 
 
-        self.army_logos = {"Space Marines": "", "Black Templars": "", "Blood Angels": "", "Dark Angels": "", "Grey Knights": "", "Space Wolves": "", "Death Watch": "",
+        self.army_logos = {"Space Marines": "army images/ultramarine.png", "Black Templars": "", "Blood Angels": "", "Dark Angels": "", "Grey Knights": "", "Space Wolves": "", "Death Watch": "",
                                     "Adepta Sororitas": "", "Adeptus Custodes": "", "Adeptus Mechanicus": "", "Astra Militarum": "",
                                     "Chaos Space Marines": "", "Death Guard": "", "Thousand Sons": "", "World Eaters": "army images/ZerkerTrim.png", "Emperor's Children": "",
                                     "Aeldari": "", "Drukhari": "", "Orkz": "", "Tau": "", "Tyranids": "", "Genestealer Cults": "", "Leagues of Votann": "", "Necrons": ""}
