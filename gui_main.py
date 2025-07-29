@@ -24,6 +24,7 @@ from PyQt5.QtGui import QPixmap, QImage
 
 
 import depthai as dai
+from depthai_nodes.node import ParsingNeuralNetwork, ImgDetectionsBridge
 import cv2
 from ultralytics import YOLO
 
@@ -151,8 +152,11 @@ class WarhammerDiceCheckerUI(QWidget):
         defender_label = QLabel("Defender Faction:")
         self.defender_dropdown = QComboBox()
         self.defender_dropdown.addItems(list(self.army_logos.keys()))
+        self.defender_dropdown.currentTextChanged.connect(self.update_attacker_logo)
+        self.defender_logo = QLabel()
         defender_layout.addWidget(defender_label)
         defender_layout.addWidget(self.defender_dropdown)
+        defender_layout.addWidget(self.defender_logo)
         defender_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Minimum, QSizePolicy.Expanding))
 
         save_continue = QPushButton("Save && Continue")
@@ -227,45 +231,54 @@ class WarhammerDiceCheckerUI(QWidget):
         return page
 
     def start_pipeline(self):
+        
+
         self.pipeline = dai.Pipeline()
 
-        # === Color camera node ===
+        # Load the model archive (.tar.xz)
+        nn_archive = dai.NNArchive("/home/warhammer/Downloads/yolov8ntrained.rvc2.tar.xz")
+
+        # === Color Camera ===
         cam = self.pipeline.create(dai.node.ColorCamera)
-        cam.setPreviewSize(640, 640)  # Must match model input size
+        cam.setPreviewSize(320, 320)
         cam.setInterleaved(False)
         cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
-        cam.setFps(10)
+        cam.setFps(20)
 
-        # === Neural Network node ===
-        nn = self.pipeline.create(dai.node.NeuralNetwork)
-        nn.setBlobPath("/home/warhammer/.cache/blobconverter/best_openvino_2022.1_6shave.blob")  # Your .blob file
-        cam.preview.link(nn.input)
+        # === Parsing Neural Network ===
+        parsed_nn = self.pipeline.create(dai.node.NeuralNetwork).build(
+            cam.preview, nn_archive
+        )
 
-        # === Outputs ===
+        # === Passthrough video ===
         xout_video = self.pipeline.create(dai.node.XLinkOut)
         xout_video.setStreamName("video")
-        cam.preview.link(xout_video.input)
+        parsed_nn.passthrough.link(xout_video.input)
 
-        xout_nn = self.pipeline.create(dai.node.XLinkOut)
-        xout_nn.setStreamName("nn")
-        nn.out.link(xout_nn.input)
+        # === Detection Bridge ===
+        det_bridge = self.pipeline.create(ImgDetectionsBridge).build(parsed_nn.out)
+        label_map = {k: v for k, v in enumerate(nn_archive.getConfig().model.heads[0].metadata.classes)}
+        det_bridge.setLabelEncoding(label_map)
 
-        # === Start device ===
+        xout_det = self.pipeline.create(dai.node.XLinkOut)
+        xout_det.setStreamName("detections")
+        det_bridge.out.link(xout_det.input)
+
+        # Start device
         self.device = dai.Device(self.pipeline)
-        self.queue = self.device.getOutputQueue(name="video", maxSize=4, blocking=False)
-        self.nn_queue = self.device.getOutputQueue(name="nn", maxSize=4, blocking=False)
+        self.queue = self.device.getOutputQueue("video", maxSize=4, blocking=False)
+        self.nn_queue = self.device.getOutputQueue("detections", maxSize=4, blocking=False)
 
         self.timer.start(30)
+
 
     def update_frame(self):
         if self.queue and self.nn_queue:
             frame = self.queue.get().getCvFrame()
-            nn_data = self.nn_queue.get()
-
-            detections = nn_data.detections if hasattr(nn_data, 'detections') else []
+            det_data = self.nn_queue.get()
+            detections = det_data.detections
 
             for det in detections:
-                # Get coords as pixel values
                 x1 = int(det.xmin * frame.shape[1])
                 y1 = int(det.ymin * frame.shape[0])
                 x2 = int(det.xmax * frame.shape[1])
@@ -273,17 +286,18 @@ class WarhammerDiceCheckerUI(QWidget):
                 label = int(det.label)
                 conf = det.confidence
 
-                # Draw box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(frame, f"ID {label} {conf:.2f}", (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+                # Draw detection
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-            # Convert to Qt
+            # Convert BGR to RGB for Qt display
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             self.video_label.setPixmap(QPixmap.fromImage(qt_image))
+
 
 
     def update_attacker_logo(self, army_name):

@@ -5,4 +5,4 @@
 from ultralytics import YOLO
 
 model = YOLO("/home/warhammer/Downloads/best.pt")
-model.export(format="onnx", opset=12, imgsz=640)
+model.export(format="onnx", opset=12, imgsz=320)
